@@ -1,0 +1,180 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+##Loading packages
+```{r}
+pacman::p_load(odds.n.ends, blorr, lmtest, car, broom, tidyverse, jtools, readr, haven, DiagrammeR, table1)
+```
+
+##Loading dataset
+```{r}
+BRFSS <- read_xpt('LLCP2021.XPT')
+```
+
+##Selecting variables of interest and confirming their inclusion in the new dataframe
+```{r}
+BRFSS1 <- BRFSS %>%
+  select(c("HIVTST7", "_INCOMG1", "SOMALE"))
+
+head(BRFSS1)
+```
+##Analyzing presence of NAs
+```{r}
+summary(BRFSS1)
+```
+##Cleaning HIVTST7 variable
+```{r}
+BRFSS2 <- BRFSS1 %>%
+  filter(HIVTST7<3)
+```
+
+##Recoding HIVTST7 as binary
+```{r}
+table(BRFSS2$HIVTST7, useNA = "always")
+
+BRFSS2 <- BRFSS2 %>%
+  mutate(HIVTST7_binary = case_when(HIVTST7 %in% c("2") ~ 0,
+                                     HIVTST7 %in% c("1") ~ 1),
+         HIVTST7_binary = factor(HIVTST7_binary, levels=c(0:1), labels=c("No", "Yes")))
+
+table(BRFSS2$HIVTST7, BRFSS2$HIVTST7_binary, useNA="always")
+```
+
+##Cleaning and renaming _INCOMG1 variable
+```{r}
+BRFSS3 <- BRFSS2%>%
+  rename("income" = "_INCOMG1")%>%
+  filter(income<8)
+```
+
+##Recoding income variable as categorical
+```{r}
+BRFSS3 <- BRFSS3%>%
+  mutate(income = as.character(income))
+  
+  
+BRFSS3<- BRFSS3 %>%
+  mutate(income = recode_factor(income, '1' = 'Less than $15,000', '2' = "$15,000 to $25,000", '3' = "$25,000 to $35,000", '4' = "$35,000 to $50,000", '5' = "$50,000 to $100,000", '6' = "$100,000 to 200,000", '7' = "$200,000 or more"))
+
+summary(BRFSS3$income)
+```
+
+
+##Cleaning the sexual orientation variable
+```{r}
+BRFSS4 <- BRFSS3 %>%
+  filter(SOMALE<4)
+```
+
+##Recoding sexuality variable as categorical
+```{r}
+BRFSS4 <- BRFSS4%>%
+  mutate(SOMALE = as.character(SOMALE))
+  
+  
+BRFSS4<- BRFSS4 %>%
+  mutate(SOMALE = recode_factor(SOMALE, '1' = 'Gay', '2' = "Straight", '3' = "Bisexual"))
+
+summary(BRFSS4$SOMALE)
+```
+
+##Checking cleaning procedure
+```{r}
+summary(BRFSS4)
+```
+
+##Running the unadjusted logistic regression and obtaining OR
+```{r}
+model1<- glm(HIVTST7_binary ~ income, data=BRFSS4, family="binomial")
+summary(model1)
+
+exp(model1$coefficients)
+exp(confint(model1))
+
+odds.n.ends(model1)
+```
+
+##Running model adjusting for sexual orientation and obtaining OR
+```{r}
+model2<- glm(HIVTST7_binary ~ income +SOMALE, data=BRFSS4, family="binomial")
+summary(model2)
+
+exp(model2$coefficients)
+exp(confint(model2))
+
+odds.n.ends(model2)
+```
+
+##Testing multicollinearity assumption (assumption was met)
+```{r}
+vif(model2)
+```
+
+##Checking Cook's distances graphically
+```{r}
+plot(model2, which = 4, id.n = 3, col="blue")
+```
+
+##Analyzing Cooks's D calculations
+```{r}
+model2.cooks <- augment(model2) %>%  
+  mutate(index = 1:n()) 
+
+head(model2.cooks)
+```
+##Excluding values with large Cook's D and determining how many values were kept (99% of values were kept and cutoff was set at 0.00025)
+```{r}
+cuttoff <- 0.00025
+
+BRFSS_clean_cooks <- model2.cooks %>%
+  filter(.cooksd<cuttoff)
+
+nrow(BRFSS_clean_cooks)/nrow(BRFSS4)
+```
+##Running final model excluding extreme values
+```{r}
+model3<- glm(HIVTST7_binary ~ income +SOMALE, data=BRFSS_clean_cooks, family="binomial")
+summary(model3)
+
+odds.n.ends(model3)
+```
+##The odds of not undergoing HIV screening decreased as the annual income of the individual increased. The lowest income category possessed the highest risk of not undergoing HIV screening (other than the $200,000 or more category). The model was statistically significant and adjusting for sexuality proved to be a better fit than the unadjusted model (see below for model fit test)
+
+```{r}
+summary(BRFSS_clean_cooks)
+```
+
+##Model fit test (adjusted model was better fit)
+```{r}
+lrtest(model1, model2)
+```
+
+##Figure 1 code
+```{r}
+grViz("digraph flowchart {
+      node [fontname = Helvetica, shape = rectangle, fontsize=10] 
+      tab1 [label = '@@1'] # starting
+      tab2 [label = '@@2'] # exclusion 1
+      tab3 [label = '@@3'] # exclusion 2
+
+      tab1 -> tab2 -> tab3 
+}
+      [1]: 'Total number of respondants in the BRFSS survey n=438,693'
+      [2]: 'Excluding 51,856 individuals who did not respond to the HIV screening question n=314,443'
+      [3]: 'Excluding 230,830 individuals who did not respond to the sexuality question n=83,613'
+      ")
+```
+##Labeling variables for table
+```{r}
+label(BRFSS4$HIVTST7_binary)<-"HIV Screening"
+label(BRFSS4$income)<-"Income Level"
+label(BRFSS4$SOMALE)<-"Sexuality"
+```
+
+##Table 1 code
+```{r}
+table1(~ income + SOMALE|HIVTST7_binary, overall="Total", rowlabelhead="Variable", BRFSS4)
+```
+
